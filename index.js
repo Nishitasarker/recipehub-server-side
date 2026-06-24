@@ -29,57 +29,52 @@ const client = new MongoClient(uri, {
 // Better Auth JWKS Endpoint URL থেকে পাবলিক কি সেটআপ
 const JWKS = createRemoteJWKSet(new URL(`${process.env.CLIENT_URL}/api/auth/jwks`))
 
-// 🎯 সংশোধনকৃত VerifyToken Middleware
-const verifyToken = async(req, res, next) => {
+const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
-  // 🛠️ ভুল সংশোধন ১: startWith না, সঠিক মেথড হলো startsWith
-  if(!authHeader || !authHeader.startsWith("Bearer ")){
-    return res.status(401).json({ msg: "Unauthorized: Missing or Malformed Token"});
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ msg: "Unauthorized: Missing or Malformed Token" });
   }
 
-  // 🛠️ ভুল সংশোধন ২: split("") এর বদলে স্পেস দিয়ে split(" ") করতে হবে টোকেন আলাদা করার জন্য
   const token = authHeader.split(" ")[1];
 
-  if(!token){
-    return res.status(401).json({msg:"Unauthorized: Token missing"})
+  if (!token) {
+    return res.status(401).json({ msg: "Unauthorized: Token missing" })
   }
 
-  try{
-    // jose লাইব্রেরি দিয়ে Better Auth এর টোকেন ভেরিফাই করা
+  try {
     const { payload } = await jwtVerify(token, JWKS);
-    
-    // ভেরিফাইড ইউজারের ডাটা রিকোয়েস্ট অবজেক্টে সেভ করে রাখা যেন নিচের API-গুলোতে ব্যবহার করা যায়
-    req.user = payload; 
+    req.user = payload;
     console.log("Authenticated User Payload:", payload);
     next();
-
   }
-  catch(error){
-     console.error("JWT Verification Error:", error.message);
-     return res.status(401).json ({msg: "Unauthorized: Invalid Token"})
+  catch (error) {
+    console.error("JWT Verification Error:", error.message);
+    return res.status(401).json({ msg: "Unauthorized: Invalid Token" })
   }
 }
 
+// 🆕 Free user-দের জন্য recipe limit
+const FREE_RECIPE_LIMIT = 2;
+
 async function run() {
   try {
-    // ডাটাবেজ কানেক্ট করা হচ্ছে
     await client.connect();
 
     const database = client.db("last_project_db");
     const recipeCollection = database.collection("recipes");
-    const userCollection = database.collection("users"); 
+   const userCollection = database.collection("user"); 
 
     // ----------------------------------------------------
     // 👤 USER RELATED APIS
     // ----------------------------------------------------
-    
+
     app.post('/api/register-user', async (req, res) => {
       try {
         const user = req.body;
         const query = { email: user.email };
         const existingUser = await userCollection.findOne(query);
-        
+
         if (existingUser) {
           return res.status(200).send({ message: 'User already exists in database', insertedId: null });
         }
@@ -131,20 +126,36 @@ async function run() {
       }
     });
 
-
     // ----------------------------------------------------
     // 🍳 RECIPE RELATED APIS (টোকেন প্রোটেক্টেড)
     // ----------------------------------------------------
-    // 🛠️ ভুল সংশোধন ৩: এন্ডপয়েন্ট রাউট /recipes থেকে /api/recipes করলাম (ফ্রন্টএন্ডের মিল রাখার জন্য) 
-    // এবং মিডলওয়্যার হিসেবে verifyToken বসিয়ে দেওয়া হলো।
+
     app.post('/api/recipes', verifyToken, async (req, res) => {
       try {
+        const authorId = req.user.id || req.user.sub;
+const authorEmail = req.user.email;
+
+// ✅ MongoDB থেকে চেক
+const userDoc = await userCollection.findOne({ email: authorEmail });
+const isPremium = userDoc?.isPremium === true;
+
+
+        // 🆕 Free user হলে limit চেক করা হচ্ছে
+        if (!isPremium) {
+          const existingCount = await recipeCollection.countDocuments({ authorId });
+          if (existingCount >= FREE_RECIPE_LIMIT) {
+            return res.status(403).send({
+              success: false,
+              code: "RECIPE_LIMIT_REACHED",
+              message: `Free plan-এ সর্বোচ্চ ${FREE_RECIPE_LIMIT}টি রেসিপি যোগ করা যায়। আরও রেসিপি যুক্ত করতে Premium-এ আপগ্রেড করুন।`
+            });
+          }
+        }
+
         const recipe = req.body;
-        
-        // টোকেন সিকিউরিটি: ফ্রন্টএন্ড থেকে পাঠানো ডেটার বদলে টোকেনের আসল ইউজার আইডি সেট করা
         const newRecipe = {
           ...recipe,
-          authorId: req.user.id || req.user.sub, // Better Auth টোকেন থেকে আইডি নেওয়া
+          authorId,
           likesCount: 0,
           isFeatured: false,
           status: "pending",
@@ -159,7 +170,31 @@ async function run() {
       }
     });
 
-    // কানেকশন টেস্ট কমান্ড
+    // 🆕 ফ্রন্টএন্ডে আগেভাগে count/limit দেখানোর জন্য নতুন endpoint
+    app.get('/api/recipes/my-status', verifyToken, async (req, res) => {
+  try {
+    const authorId = req.user.id || req.user.sub;
+    const authorEmail = req.user.email;
+
+    // ✅ MongoDB থেকে চেক
+    const userDoc = await userCollection.findOne({ email: authorEmail });
+    const isPremium = userDoc?.isPremium === true;
+
+    const count = await recipeCollection.countDocuments({ authorId });
+
+    res.send({
+      success: true,
+      count,
+      limit: isPremium ? null : FREE_RECIPE_LIMIT,
+      isPremium,
+      canAddMore: isPremium || count < FREE_RECIPE_LIMIT
+    });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+       
+
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
 
