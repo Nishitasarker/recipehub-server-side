@@ -9,7 +9,13 @@ app.use(cors());
 app.use(express.json());
 
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
-const { createRemoteJWKSet, jwtVerify } = require('jose-cjs');
+
+app.use(cors({
+    origin: "http://localhost:3000", // আপনার ফ্রন্টএন্ড URL
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+    credentials: true
+}));
+
 
 // Root Route
 app.get('/', (req, res) => {
@@ -26,22 +32,59 @@ const client = new MongoClient(uri, {
 });
 
 // Auth Verification Middleware
-const JWKS = createRemoteJWKSet(new URL(`${process.env.CLIENT_URL}/api/auth/jwks`))
+// Auth Verification Middleware (সংশোধিত)
+
 const verifyToken = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ msg: "Unauthorized: Missing or Malformed Token" });
-  }
-  const token = authHeader.split(" ")[1];
   try {
-    const { payload } = await jwtVerify(token, JWKS);
-    req.user = payload;
+    const authHeader = req.headers.authorization;
+    console.log("Received Auth Header:", authHeader);
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ success: false, message: "Missing Token" });
+    }
+
+    const token = authHeader.split(" ")[1];
+
+    if (!token || token === "undefined" || token === "null") {
+      return res.status(401).json({ success: false, message: "Token is null" });
+    }
+
+    // MongoDB-তে Better Auth-এর session collection থেকে সরাসরি verify
+    const db = client.db("last_project_db");
+    const sessionCollection = db.collection("session"); // Better Auth এই নামে session রাখে
+
+    const sessionDoc = await sessionCollection.findOne({ token: token });
+
+    if (!sessionDoc) {
+      return res.status(401).json({ success: false, message: "Session not found" });
+    }
+
+    // Session expire হয়েছে কিনা চেক
+    if (new Date(sessionDoc.expiresAt) < new Date()) {
+      return res.status(401).json({ success: false, message: "Session expired" });
+    }
+
+    // User collection থেকে user info নিয়ে আসো
+    const userCol = db.collection("user");
+    const user = await userCol.findOne({ _id: sessionDoc.userId });
+
+    if (!user) {
+      return res.status(401).json({ success: false, message: "User not found" });
+    }
+
+    req.user = {
+      id: user.id || user._id.toString(),
+      email: user.email,
+      name: user.name,
+    };
+
     next();
   } catch (error) {
-    console.error("JWT Verification Error:", error.message);
-    return res.status(401).json({ msg: "Unauthorized: Invalid Token" })
+    console.error("Auth Error:", error.message);
+    return res.status(401).json({ success: false, message: "Unauthorized" });
   }
-}
+};
+
 
 const FREE_RECIPE_LIMIT = 2;
 
@@ -361,73 +404,204 @@ app.patch('/api/recipes/like/:id', async (req, res) => {
   }
 });
 
+app.patch('/api/recipes/unlike/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { userEmail } = req.body;
+    if (!ObjectId.isValid(id)) return res.status(400).send({ success: false, message: "Invalid ID" });
+    if (!userEmail) return res.status(400).send({ success: false, message: "userEmail required" });
+
+    const existingLike = await likeCollection.findOne({ recipeId: id, userEmail });
+    if (!existingLike) return res.status(400).send({ success: false, message: "Not liked yet" });
+
+    await likeCollection.deleteOne({ recipeId: id, userEmail });
+    await recipeCollection.updateOne({ _id: new ObjectId(id) }, { $inc: { likesCount: -1 } });
+
+    res.status(200).send({ success: true, message: "Like removed!" });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
 
     // ----------------------------------------------------
     // ❤️ 8. ADD TO FAVORITES (New)
     // ----------------------------------------------------
-    app.post('/api/favorites', verifyToken, async (req, res) => {
+   app.post('/api/favorites', async (req, res) => {
+  try {
+    const { recipeId, recipeName, recipeImage, userEmail } = req.body;
+    if (!recipeId || !userEmail) {
+      return res.status(400).send({ success: false, message: "Recipe ID and email required" });
+    }
+    const existing = await favoriteCollection.findOne({ userEmail, recipeId: recipeId.toString() });
+    if (existing) {
+      return res.status(400).send({ success: false, message: "Already added to favorites" });
+    }
+    const result = await favoriteCollection.insertOne({
+      userEmail, recipeId: recipeId.toString(), recipeName, recipeImage, addedAt: new Date()
+    });
+    res.status(201).send({ success: true, message: "Added to favorites!", insertedId: result.insertedId });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+app.delete('/api/favorites', async (req, res) => {
+  try {
+    const { recipeId, userEmail } = req.body;
+    if (!recipeId || !userEmail) {
+      return res.status(400).send({ success: false, message: "Recipe ID and email required" });
+    }
+    const result = await favoriteCollection.deleteOne({ userEmail, recipeId: recipeId.toString() });
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ success: false, message: "Favorite not found" });
+    }
+    res.status(200).send({ success: true, message: "Removed from favorites!" });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+   //  এই কোডটি দিয়ে প্রতিস্থাপন (Replace) করুন:
+app.get('/api/my-recipes', verifyToken, async (req, res) => {
+  try {
+    // ১. প্রথমে টোকেন থেকে ইমেইল বা আইডি বের করার চেষ্টা করি
+    let authorEmail = req.user?.email;
+    const userId = req.user?.id || req.user?.sub;
+
+    // ২. যদি টোকেনে সরাসরি ইমেইল না থাকে, তবে ডাটাবেজের 'user' কালেকশন থেকে আইডি দিয়ে ইমেইলটি খুঁজে আনবো
+    if (!authorEmail && userId) {
+      const dbUser = await userCollection.findOne({ 
+        $or: [
+          { _id: userId },
+          { _id: new ObjectId(userId) },
+          { uid: userId } // Firebase ব্যবহার করলে uid থাকতে পারে
+        ]
+      });
+      if (dbUser) {
+        authorEmail = dbUser.email;
+      }
+    }
+
+    // ৩. যদি কোনোভাবেই ইমেইল না পাওয়া যায়, তবে এরর রেসপন্স দেবো
+    if (!authorEmail) {
+      return res.status(400).send({ 
+        success: false, 
+        message: "ইউজারের ইমেইল পাওয়া যায়নি। টোকেন বা ডাটাবেজ চেক করুন।" 
+      });
+    }
+
+    // ৪. এবার নিখুঁতভাবে recipes কালেকশনের authorEmail এর সাথে ম্যাচ করে রেসিপি নিয়ে আসবো
+    const query = { authorEmail: authorEmail };
+    const myRecipes = await recipeCollection.find(query).sort({ createdAt: -1 }).toArray();
+    
+    res.status(200).send({ success: true, data: myRecipes });
+  } catch (error) {
+    console.error("My Recipes Error:", error);
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+    
+   // ----------------------------------------------------
+    // 📝 10. UPDATE RECIPE WITH OWNER CHECK (সংশোধিত)
+    // ----------------------------------------------------
+    app.put('/api/recipes/:id', verifyToken, async (req, res) => {
       try {
-        const { recipeId, recipeName, recipeImage } = req.body;
-        const userEmail = req.user.email;
+        const id = req.params.id;
+        const updatedData = req.body;
 
-        if (!recipeId) {
-          return res.status(400).send({ success: false, message: "Recipe ID is required" });
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ success: false, message: "Invalid Recipe ID" });
         }
 
-        const existingFavorite = await favoriteCollection.findOne({
-          userEmail: userEmail,
-          recipeId: recipeId.toString()
-        });
-
-        if (existingFavorite) {
-          return res.status(400).send({ success: false, message: "Already added to favorites" });
+        // টোকেন বা ইউজার কালেকশন থেকে ইমেইল বের করা
+        let authorEmail = req.user?.email;
+        const userId = req.user?.id || req.user?.sub;
+        if (!authorEmail && userId) {
+          const dbUser = await userCollection.findOne({ 
+            $or: [{ _id: userId }, { _id: new ObjectId(userId) }, { uid: userId }]
+          });
+          if (dbUser) authorEmail = dbUser.email;
         }
 
-        const favoriteDoc = {
-          userEmail: userEmail,
-          recipeId: recipeId.toString(),
-          recipeName,
-          recipeImage,
-          addedAt: new Date()
+        if (!authorEmail) {
+          return res.status(400).send({ success: false, message: "User email not found." });
+        }
+
+        // চেক করা হচ্ছে রেসিপিটি আসলেই এই ইউজারের কি না
+        const recipe = await recipeCollection.findOne({ _id: new ObjectId(id) });
+        if (!recipe) {
+          return res.status(404).send({ success: false, message: "Recipe not found" });
+        }
+        if (recipe.authorEmail !== authorEmail) {
+          return res.status(403).send({ success: false, message: "Unauthorized: You can only update your own recipes" });
+        }
+
+        const filter = { _id: new ObjectId(id) };
+        const updateDoc = {
+          $set: {
+            recipeName: updatedData.recipeName,
+            category: updatedData.category,
+            cuisineType: updatedData.cuisineType,
+            difficultyLevel: updatedData.difficultyLevel,
+            preparationTime: parseInt(updatedData.preparationTime) || 10,
+            ingredients: Array.isArray(updatedData.ingredients) ? updatedData.ingredients : [updatedData.ingredients],
+            instructions: updatedData.instructions,
+            recipeImage: updatedData.recipeImage,
+            status: "pending", // আপডেট করলে অ্যাডমিনের রিভিউর জন্য আবার pending হবে
+            updatedAt: new Date()
+          }
         };
 
-        const result = await favoriteCollection.insertOne(favoriteDoc);
-        res.status(201).send({ 
-          success: true, 
-          message: "Added to favorites successfully!", 
-          insertedId: result.insertedId 
-        });
+        const result = await recipeCollection.updateOne(filter, updateDoc);
+        res.status(200).send({ success: true, message: "Recipe updated successfully!", result });
       } catch (error) {
         res.status(500).send({ success: false, message: error.message });
       }
     });
 
     // ----------------------------------------------------
-    // 💔 9. REMOVE FROM FAVORITES (New)
+    // 🗑️ 11. DELETE RECIPE WITH OWNER CHECK (সংশোধিত)
     // ----------------------------------------------------
-    app.delete('/api/favorites', verifyToken, async (req, res) => {
+    app.delete('/api/recipes/:id', verifyToken, async (req, res) => {
       try {
-        const { recipeId } = req.body;
-        const userEmail = req.user.email;
+        const id = req.params.id;
 
-        if (!recipeId) {
-          return res.status(400).send({ success: false, message: "Recipe ID is required" });
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ success: false, message: "Invalid Recipe ID" });
         }
 
-        const result = await favoriteCollection.deleteOne({
-          userEmail: userEmail,
-          recipeId: recipeId.toString()
-        });
-
-        if (result.deletedCount === 0) {
-          return res.status(404).send({ success: false, message: "Favorite item not found" });
+        // টোকেন বা ইউজার কালেকশন থেকে ইমেইল বের করা
+        let authorEmail = req.user?.email;
+        const userId = req.user?.id || req.user?.sub;
+        if (!authorEmail && userId) {
+          const dbUser = await userCollection.findOne({ 
+            $or: [{ _id: userId }, { _id: new ObjectId(userId) }, { uid: userId }]
+          });
+          if (dbUser) authorEmail = dbUser.email;
         }
 
-        res.status(200).send({ success: true, message: "Removed from favorites successfully!" });
+        if (!authorEmail) {
+          return res.status(400).send({ success: false, message: "User email not found." });
+        }
+
+        // সিকিউরিটি চেক: ওনারশিপ ভেরিফিকেশন
+        const recipe = await recipeCollection.findOne({ _id: new ObjectId(id) });
+        if (!recipe) {
+          return res.status(404).send({ success: false, message: "Recipe not found" });
+        }
+        if (recipe.authorEmail !== authorEmail) {
+          return res.status(403).send({ success: false, message: "Unauthorized: You can only delete your own recipes" });
+        }
+
+        const result = await recipeCollection.deleteOne({ _id: new ObjectId(id) });
+        res.status(200).send({ success: true, message: "Recipe deleted successfully!", result });
       } catch (error) {
         res.status(500).send({ success: false, message: error.message });
       }
     });
+
 
     console.log("Connected successfully to MongoDB!");
   } catch (error) {
