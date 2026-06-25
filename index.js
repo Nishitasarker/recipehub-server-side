@@ -374,6 +374,60 @@ app.get('/api/user-actions/:email/:recipeId', async (req, res) => {
       }
     });
 
+
+    // ----------------------------------------------------
+// 🛒 GET USER'S PURCHASED RECIPES (with full recipe details)
+// ----------------------------------------------------
+app.get('/api/my-purchased-recipes', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
+
+    // ১. এই ইউজারের সব successful purchase খুঁজে আনা
+    const purchases = await purchasedRecipesCollection
+      .find({ userEmail: email, paymentStatus: "paid" })
+      .sort({ purchasedAt: -1 })
+      .toArray();
+
+    if (purchases.length === 0) {
+      return res.status(200).send({ success: true, data: [] });
+    }
+
+    // ২. recipeId গুলো ObjectId এ কনভার্ট করে recipes কালেকশন থেকে ডিটেইলস আনা
+    const recipeIds = purchases
+      .filter(p => ObjectId.isValid(p.recipeId))
+      .map(p => new ObjectId(p.recipeId));
+
+    const recipes = await recipeCollection
+      .find({ _id: { $in: recipeIds } })
+      .toArray();
+
+    // ৩. পারচেজ ইনফো আর রেসিপি ডিটেইলস একসাথে merge করা
+    const merged = purchases.map((purchase) => {
+      const recipe = recipes.find(r => r._id.toString() === purchase.recipeId);
+      return {
+        purchaseId: purchase._id,
+        recipeId: purchase.recipeId,
+        amount: purchase.amount,
+        purchasedAt: purchase.purchasedAt || purchase.paidAt,
+        recipeName: recipe?.recipeName || "Recipe Unavailable",
+        recipeImage: recipe?.recipeImage || null,
+        category: recipe?.category || "N/A",
+        cuisineType: recipe?.cuisineType || "N/A",
+        preparationTime: recipe?.preparationTime || null,
+        authorName: recipe?.authorName || "Unknown Chef",
+      };
+    });
+
+    res.status(200).send({ success: true, data: merged });
+  } catch (error) {
+    console.error("My Purchased Recipes Error:", error);
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
     // server.js এ এই route যোগ করো (run() ফাংশনের ভেতরে)
 app.patch('/api/recipes/like/:id', async (req, res) => {
   try {
