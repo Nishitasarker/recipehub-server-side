@@ -462,6 +462,25 @@ app.delete('/api/favorites', async (req, res) => {
   }
 });
 
+
+// ----------------------------------------------------
+// ❤️ GET USER'S FAVORITE RECIPES
+// ----------------------------------------------------
+app.get('/api/my-favorites', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
+    const myFavorites = await favoriteCollection.find({ userEmail: email }).toArray();
+    res.status(200).send({ success: true, data: myFavorites });
+  } catch (error) {
+    console.error("Fetch Favorites Error:", error);
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+
    //  এই কোডটি দিয়ে প্রতিস্থাপন (Replace) করুন:
 app.get('/api/my-recipes', verifyToken, async (req, res) => {
   try {
