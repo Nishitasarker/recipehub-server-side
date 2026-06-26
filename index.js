@@ -606,6 +606,97 @@ app.get('/api/admin-stats', async (req, res) => {
   }
 });
 
+
+// ----------------------------------------------------
+// 👥 MANAGE USERS (ADMIN APIS)
+// ----------------------------------------------------
+
+// ১. সকল ইউজারদের ডাটা নিয়ে আসার জন্য GET API (Admins Only)
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
+
+    const adminUser = await userCollection.findOne({ email });
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).send({ success: false, message: "Access denied. Admins only." });
+    }
+
+    const users = await userCollection.find({ role: "user" }).sort({ createdAt: -1 }).toArray();
+    res.status(200).send({ success: true, data: users });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+// ২. ইউজারকে ব্লক (Block) করার জন্য PATCH API
+app.patch('/api/admin/users/block/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { email } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: "Invalid User ID" });
+    }
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
+
+    const adminUser = await userCollection.findOne({ email });
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).send({ success: false, message: "Access denied. Admins only." });
+    }
+
+    const result = await userCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { isBlocked: true, updatedAt: new Date() } }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(404).send({ success: false, message: "User not found or already blocked" });
+    }
+
+    res.status(200).send({ success: true, message: "User blocked successfully!" });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+// ৩. ইউজারকে আনব্লক (Unblock) করার জন্য PATCH API
+app.patch('/api/admin/users/unblock/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { email } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: "Invalid User ID" });
+    }
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
+
+    const adminUser = await userCollection.findOne({ email });
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).send({ success: false, message: "Access denied. Admins only." });
+    }
+
+    const result = await userCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { isBlocked: false, updatedAt: new Date() } }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(404).send({ success: false, message: "User not found or already unblocked" });
+    }
+
+    res.status(200).send({ success: true, message: "User unblocked successfully!" });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
    //  এই কোডটি দিয়ে প্রতিস্থাপন (Replace) করুন:
 app.get('/api/my-recipes', verifyToken, async (req, res) => {
   try {
