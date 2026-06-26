@@ -264,10 +264,16 @@ app.get('/api/user-actions/:email/:recipeId', async (req, res) => {
       recipeId: recipeId.toString()
     });
 
+     const report = await reportCollection.findOne({
+      reporterEmail: email,
+      recipeId: recipeId.toString()
+    });
+
     res.status(200).send({
       success: true,
       isFavorite: !!favorite,
       isLiked: !!like,
+      isReported: !!report,
     });
   } catch (error) {
     res.status(500).send({ success: false, message: error.message });
@@ -534,6 +540,71 @@ app.get('/api/my-favorites', async (req, res) => {
   }
 });
 
+
+// POST: রিপোর্ট জমা দেওয়ার জন্য
+// POST: রিপোর্ট জমা দেওয়ার জন্য
+app.post('/api/reports', async (req, res) => {
+  try {
+    const { recipeId, userEmail, reason } = req.body;
+
+    if (!recipeId || !userEmail || !reason) {
+      return res.status(400).send({ success: false, message: "Missing required fields" });
+    }
+
+    // চেক করুন ইউজার আগে রিপোর্ট করেছে কি না
+    const alreadyReported = await reportCollection.findOne({ recipeId, reporterEmail: userEmail });
+    if (alreadyReported) {
+       return res.status(400).send({ success: false, message: "You have already reported this recipe!" });
+    }
+
+    const reportDoc = {
+      recipeId,
+      reporterEmail: userEmail,
+      reason,
+      status: "pending",
+      createdAt: new Date()
+    };
+    const result = await reportCollection.insertOne(reportDoc);
+    res.status(201).send({ success: true, message: "Report submitted!" });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+
+// GET: অ্যাডমিন ড্যাশবোর্ড পরিসংখ্যান
+app.get('/api/admin-stats', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
+
+    const requestingUser = await userCollection.findOne({ email });
+    if (!requestingUser || requestingUser.role !== 'admin') {
+      return res.status(403).send({ success: false, message: "Access denied. Admins only." });
+    }
+
+    // ✅ শুধু role: "user" — admin বাদ দিয়ে কাউন্ট
+    const totalUsers = await userCollection.countDocuments({ role: "user" });
+    const totalRecipes = await recipeCollection.estimatedDocumentCount();
+    const totalReports = await reportCollection.estimatedDocumentCount();
+    const totalPremiumMembers = await userCollection.countDocuments({ 
+      role: "user", 
+      isPremium: true 
+    });
+
+    res.status(200).send({
+      success: true,
+      totalUsers,
+      totalRecipes,
+      totalPremiumMembers,
+      totalReports
+    });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
 
    //  এই কোডটি দিয়ে প্রতিস্থাপন (Replace) করুন:
 app.get('/api/my-recipes', verifyToken, async (req, res) => {
