@@ -697,37 +697,248 @@ app.patch('/api/admin/users/unblock/:id', async (req, res) => {
   }
 });
 
-   //  এই কোডটি দিয়ে প্রতিস্থাপন (Replace) করুন:
-app.get('/api/my-recipes', verifyToken, async (req, res) => {
+
+// ============================================================================
+// 🍳 MANAGE RECIPES (ADMIN APIS)
+// ============================================================================
+
+/// ১. সকল ব্যবহারকারীর সমস্ত রেসিপি নিয়ে আসার জন্য GET API (Admins Only)
+app.get('/api/admin/recipes', async (req, res) => {
   try {
-    // ১. প্রথমে টোকেন থেকে ইমেইল বা আইডি বের করার চেষ্টা করি
-    let authorEmail = req.user?.email;
-    const userId = req.user?.id || req.user?.sub;
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
 
-    // ২. যদি টোকেনে সরাসরি ইমেইল না থাকে, তবে ডাটাবেজের 'user' কালেকশন থেকে আইডি দিয়ে ইমেইলটি খুঁজে আনবো
-    if (!authorEmail && userId) {
-      const dbUser = await userCollection.findOne({ 
-        $or: [
-          { _id: userId },
-          { _id: new ObjectId(userId) },
-          { uid: userId } // Firebase ব্যবহার করলে uid থাকতে পারে
-        ]
-      });
-      if (dbUser) {
-        authorEmail = dbUser.email;
+    const adminUser = await userCollection.findOne({ email });
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).send({ success: false, message: "Access denied. Admins only." });
+    }
+
+    const recipes = await recipeCollection.find({}).sort({ createdAt: -1 }).toArray();
+    res.status(200).send({ success: true, data: recipes });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+// ২. রেসিপি ফিচারড (Featured) বা আন-ফিচারড করার জন্য PATCH API
+app.patch('/api/admin/recipes/feature/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { isFeatured, email } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: "Invalid Recipe ID" });
+    }
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
+
+    const adminUser = await userCollection.findOne({ email });
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).send({ success: false, message: "Access denied. Admins only." });
+    }
+
+    const result = await recipeCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { isFeatured: isFeatured, updatedAt: new Date() } }
+    );
+
+    res.status(200).send({ 
+      success: true, 
+      message: isFeatured ? "Recipe marked as Featured!" : "Recipe removed from Featured!" 
+    });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+// ৩. অ্যাডমিন কর্তৃক যেকোনো রেসিপি সরাসরি ডিলিট করার জন্য DELETE API
+app.delete('/api/admin/recipes/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { email } = req.query;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: "Invalid Recipe ID" });
+    }
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
+
+    const adminUser = await userCollection.findOne({ email });
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).send({ success: false, message: "Access denied. Admins only." });
+    }
+
+    const result = await recipeCollection.deleteOne({ _id: new ObjectId(id) });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).send({ success: false, message: "Recipe not found" });
+    }
+
+    res.status(200).send({ success: true, message: "Recipe deleted successfully by admin!" });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+// ৪. অ্যাডমিন কর্তৃক যেকোনো রেসিপি Edit/Update করার জন্য PUT API
+app.put('/api/admin/recipes/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updatedData = req.body;
+    const { email } = updatedData; // অ্যাডমিনের ইমেইল, frontend থেকে আসবে
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: "Invalid Recipe ID" });
+    }
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
+
+    const adminUser = await userCollection.findOne({ email });
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).send({ success: false, message: "Access denied. Admins only." });
+    }
+
+    const recipe = await recipeCollection.findOne({ _id: new ObjectId(id) });
+    if (!recipe) {
+      return res.status(404).send({ success: false, message: "Recipe not found" });
+    }
+
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = {
+      $set: {
+        recipeName: updatedData.recipeName,
+        category: updatedData.category,
+        cuisineType: updatedData.cuisineType,
+        difficultyLevel: updatedData.difficultyLevel,
+        preparationTime: parseInt(updatedData.preparationTime) || 10,
+        instructions: updatedData.instructions,
+        updatedAt: new Date()
       }
+    };
+
+    const result = await recipeCollection.updateOne(filter, updateDoc);
+    res.status(200).send({ success: true, message: "Recipe updated successfully by admin!", result });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+
+
+// ============================================================================
+// 🚨 RECIPE REPORTS (ADMIN APIS)
+// ============================================================================
+
+// ১. ডাটাবেজ থেকে সকল রিপোর্ট করা রেসিপির লিস্ট নিয়ে আসা (GET API)
+// ১. ডাটাবেজ থেকে সকল রিপোর্ট করা রেসিপির লিস্ট নিয়ে আসা (GET API)
+app.get('/api/admin/reports', verifyToken, async (req, res) => {
+  try {
+    const requesterEmail = req.query.email;
+    
+    // রিকোয়েস্টকারী আসলেই অ্যাডমিন কিনা চেক করা
+    const adminUser = await userCollection.findOne({ email: requesterEmail });
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).send({ success: false, message: "Access denied. Admins only." });
     }
 
-    // ৩. যদি কোনোভাবেই ইমেইল না পাওয়া যায়, তবে এরর রেসপন্স দেবো
-    if (!authorEmail) {
-      return res.status(400).send({ 
-        success: false, 
-        message: "ইউজারের ইমেইল পাওয়া যায়নি। টোকেন বা ডাটাবেজ চেক করুন।" 
-      });
+    // Reports কালেকশন থেকে ডাটা আনা এবং String ID কে ObjectId তে রূপান্তর করে ম্যাচ করা
+    const reports = await reportCollection.aggregate([
+      {
+        $lookup: {
+          from: "recipes",
+          let: { r_id: "$recipeId" }, // reports কালেকশনের recipeId স্ট্রিংটি r_id ভেরিয়েবলে নিলাম
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  // স্ট্রিং r_id কে ObjectId তে রূপান্তর করে recipes এর _id এর সাথে তুলনা করা হচ্ছে
+                  $eq: ["$_id", { $toObjectId: "$$r_id" }] 
+                }
+              }
+            }
+          ],
+          as: "recipeDetails"
+        }
+      },
+      {
+        $unwind: {
+          path: "$recipeDetails",
+          preserveNullAndEmptyArrays: true // রেসিপি সত্যি ডিলিট হয়ে গেলেও যেন রিপোর্ট লিস্টে থাকে
+        }
+      },
+      { $sort: { createdAt: -1 } }
+    ]).toArray();
+
+    res.status(200).send({ success: true, data: reports });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+// ২. রিপোর্টের ওপর অ্যাকশন নেওয়া (Dismiss Report অথবা Remove Recipe) (PATCH/DELETE API)
+// ============================================================================
+// 🚨 RECIPE REPORTS (ADMIN APIS) - [PATCH/DELETE OPTION 1 LOGIC]
+// ============================================================================
+app.patch('/api/admin/reports/:id', verifyToken, async (req, res) => {
+  try {
+    const reportId = req.params.id;
+    const { action, recipeId, email } = req.body; // action: 'dismiss' অথবা 'remove'
+
+    if (!ObjectId.isValid(reportId)) {
+      return res.status(400).send({ success: false, message: "Invalid Report ID" });
     }
 
-    // ৪. এবার নিখুঁতভাবে recipes কালেকশনের authorEmail এর সাথে ম্যাচ করে রেসিপি নিয়ে আসবো
-    const query = { authorEmail: authorEmail };
+    const adminUser = await userCollection.findOne({ email: email });
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).send({ success: false, message: "Access denied. Admins only." });
+    }
+
+    // [Option 1]: Dismiss করলে রিপোর্ট সরাসরি ডাটাবেজ থেকে মুছে যাবে
+    if (action === 'dismiss') {
+      const deleteReport = await reportCollection.deleteOne({ _id: new ObjectId(reportId) });
+      
+      if (deleteReport.deletedCount === 0) {
+        return res.status(404).send({ success: false, message: "Report not found" });
+      }
+      return res.status(200).send({ success: true, message: "Report dismissed and cleared successfully!" });
+    } 
+    
+    // [Option 1]: Remove করলে রেসিপি ডিলিট হবে এবং এই রিপোর্টটিও ডাটাবেজ থেকে মুছে যাবে
+    if (action === 'remove') {
+      if (recipeId && ObjectId.isValid(recipeId)) {
+        await recipeCollection.deleteOne({ _id: new ObjectId(recipeId) });
+      }
+      
+      // রেসিপি ডিলিট করার পর এই রিপোর্টটিও ডাটাবেজ থেকে সাফ করে দেওয়া হচ্ছে
+      await reportCollection.deleteOne({ _id: new ObjectId(reportId) });
+      
+      return res.status(200).send({ success: true, message: "Recipe removed and report cleared successfully!" });
+    }
+
+    res.status(400).send({ success: false, message: "Invalid action specified" });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+// ============================================================================
+// 🍳 USER RECIPES MANAGEMENT ROUTES
+// ============================================================================
+
+// GET MY RECIPES
+app.get('/api/my-recipes', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
+
+    const query = { authorEmail: email };
     const myRecipes = await recipeCollection.find(query).sort({ createdAt: -1 }).toArray();
     
     res.status(200).send({ success: true, data: myRecipes });
@@ -737,106 +948,78 @@ app.get('/api/my-recipes', verifyToken, async (req, res) => {
   }
 });
 
-    
-   // ----------------------------------------------------
-    // 📝 10. UPDATE RECIPE WITH OWNER CHECK (সংশোধিত)
-    // ----------------------------------------------------
-    app.put('/api/recipes/:id', verifyToken, async (req, res) => {
-      try {
-        const id = req.params.id;
-        const updatedData = req.body;
+// UPDATE RECIPE WITH OWNER CHECK
+app.put('/api/recipes/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updatedData = req.body;
+    const authorEmail = updatedData.email; // ফ্রন্টএন্ড থেকে email আসবে
 
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).send({ success: false, message: "Invalid Recipe ID" });
-        }
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: "Invalid Recipe ID" });
+    }
+    if (!authorEmail) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
 
-        // টোকেন বা ইউজার কালেকশন থেকে ইমেইল বের করা
-        let authorEmail = req.user?.email;
-        const userId = req.user?.id || req.user?.sub;
-        if (!authorEmail && userId) {
-          const dbUser = await userCollection.findOne({ 
-            $or: [{ _id: userId }, { _id: new ObjectId(userId) }, { uid: userId }]
-          });
-          if (dbUser) authorEmail = dbUser.email;
-        }
+    const recipe = await recipeCollection.findOne({ _id: new ObjectId(id) });
+    if (!recipe) {
+      return res.status(404).send({ success: false, message: "Recipe not found" });
+    }
+    if (recipe.authorEmail !== authorEmail) {
+      return res.status(403).send({ success: false, message: "Unauthorized: You can only update your own recipes" });
+    }
 
-        if (!authorEmail) {
-          return res.status(400).send({ success: false, message: "User email not found." });
-        }
-
-        // চেক করা হচ্ছে রেসিপিটি আসলেই এই ইউজারের কি না
-        const recipe = await recipeCollection.findOne({ _id: new ObjectId(id) });
-        if (!recipe) {
-          return res.status(404).send({ success: false, message: "Recipe not found" });
-        }
-        if (recipe.authorEmail !== authorEmail) {
-          return res.status(403).send({ success: false, message: "Unauthorized: You can only update your own recipes" });
-        }
-
-        const filter = { _id: new ObjectId(id) };
-        const updateDoc = {
-          $set: {
-            recipeName: updatedData.recipeName,
-            category: updatedData.category,
-            cuisineType: updatedData.cuisineType,
-            difficultyLevel: updatedData.difficultyLevel,
-            preparationTime: parseInt(updatedData.preparationTime) || 10,
-            ingredients: Array.isArray(updatedData.ingredients) ? updatedData.ingredients : [updatedData.ingredients],
-            instructions: updatedData.instructions,
-            recipeImage: updatedData.recipeImage,
-            status: "pending", // আপডেট করলে অ্যাডমিনের রিভিউর জন্য আবার pending হবে
-            updatedAt: new Date()
-          }
-        };
-
-        const result = await recipeCollection.updateOne(filter, updateDoc);
-        res.status(200).send({ success: true, message: "Recipe updated successfully!", result });
-      } catch (error) {
-        res.status(500).send({ success: false, message: error.message });
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = {
+      $set: {
+        recipeName: updatedData.recipeName,
+        category: updatedData.category,
+        cuisineType: updatedData.cuisineType,
+        difficultyLevel: updatedData.difficultyLevel,
+        preparationTime: parseInt(updatedData.preparationTime) || 10,
+        ingredients: Array.isArray(updatedData.ingredients) ? updatedData.ingredients : [updatedData.ingredients],
+        instructions: updatedData.instructions,
+        recipeImage: updatedData.recipeImage,
+        status: "pending",
+        updatedAt: new Date()
       }
-    });
+    };
 
-    // ----------------------------------------------------
-    // 🗑️ 11. DELETE RECIPE WITH OWNER CHECK (সংশোধিত)
-    // ----------------------------------------------------
-    app.delete('/api/recipes/:id', verifyToken, async (req, res) => {
-      try {
-        const id = req.params.id;
+    const result = await recipeCollection.updateOne(filter, updateDoc);
+    res.status(200).send({ success: true, message: "Recipe updated successfully!", result });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
 
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).send({ success: false, message: "Invalid Recipe ID" });
-        }
+// DELETE RECIPE WITH OWNER CHECK
+app.delete('/api/recipes/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { email } = req.query;
 
-        // টোকেন বা ইউজার কালেকশন থেকে ইমেইল বের করা
-        let authorEmail = req.user?.email;
-        const userId = req.user?.id || req.user?.sub;
-        if (!authorEmail && userId) {
-          const dbUser = await userCollection.findOne({ 
-            $or: [{ _id: userId }, { _id: new ObjectId(userId) }, { uid: userId }]
-          });
-          if (dbUser) authorEmail = dbUser.email;
-        }
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ success: false, message: "Invalid Recipe ID" });
+    }
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
 
-        if (!authorEmail) {
-          return res.status(400).send({ success: false, message: "User email not found." });
-        }
+    const recipe = await recipeCollection.findOne({ _id: new ObjectId(id) });
+    if (!recipe) {
+      return res.status(404).send({ success: false, message: "Recipe not found" });
+    }
+    if (recipe.authorEmail !== email) {
+      return res.status(403).send({ success: false, message: "Unauthorized: You can only delete your own recipes" });
+    }
 
-        // সিকিউরিটি চেক: ওনারশিপ ভেরিফিকেশন
-        const recipe = await recipeCollection.findOne({ _id: new ObjectId(id) });
-        if (!recipe) {
-          return res.status(404).send({ success: false, message: "Recipe not found" });
-        }
-        if (recipe.authorEmail !== authorEmail) {
-          return res.status(403).send({ success: false, message: "Unauthorized: You can only delete your own recipes" });
-        }
-
-        const result = await recipeCollection.deleteOne({ _id: new ObjectId(id) });
-        res.status(200).send({ success: true, message: "Recipe deleted successfully!", result });
-      } catch (error) {
-        res.status(500).send({ success: false, message: error.message });
-      }
-    });
-
+    const result = await recipeCollection.deleteOne({ _id: new ObjectId(id) });
+    res.status(200).send({ success: true, message: "Recipe deleted successfully!", result });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
 
     console.log("Connected successfully to MongoDB!");
   } catch (error) {
