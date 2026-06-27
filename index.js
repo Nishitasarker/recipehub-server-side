@@ -444,6 +444,59 @@ app.get('/api/my-purchased-recipes', async (req, res) => {
   }
 });
 
+
+// ----------------------------------------------------
+// 💾 SAVE PURCHASE (called by Next.js after Stripe payment verification)
+// ----------------------------------------------------
+app.post('/api/save-purchase', async (req, res) => {
+  try {
+    const { email, recipeId, purchaseType, sessionId, amount } = req.body;
+
+    if (!email || !sessionId) {
+      return res.status(400).send({ success: false, message: "Email and sessionId are required" });
+    }
+
+    // ডুপ্লিকেট প্রসেসিং ঠেকানোর জন্য — একই session আবার process হবে না
+    const alreadyPaid = await paymentCollection.findOne({ transactionId: sessionId });
+    const alreadyPurchased = await purchasedRecipesCollection.findOne({ transactionId: sessionId });
+    if (alreadyPaid || alreadyPurchased) {
+      return res.status(200).send({ success: true, message: "Already processed" });
+    }
+
+    if (purchaseType === "single_recipe" && recipeId) {
+      // ✅ একটি নির্দিষ্ট রেসিপি কেনা হয়েছে
+      await purchasedRecipesCollection.insertOne({
+        userEmail: email,
+        recipeId: recipeId.toString(),
+        purchaseType: "single_recipe",
+        transactionId: sessionId,
+        amount: amount || 4.99,
+        paymentStatus: "paid",
+        purchasedAt: new Date()
+      });
+    } else {
+      // ✅ প্রিমিয়াম মেম্বারশিপ কেনা হয়েছে
+      await paymentCollection.insertOne({
+        userEmail: email,
+        amount: amount || 19.99,
+        transactionId: sessionId,
+        paymentStatus: "paid",
+        paidAt: new Date()
+      });
+
+      await userCollection.updateOne(
+        { email },
+        { $set: { isPremium: true, updatedAt: new Date() } }
+      );
+    }
+
+    res.status(201).send({ success: true, message: "Purchase saved successfully!" });
+  } catch (error) {
+    console.error("Save Purchase Error:", error);
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
     // server.js এ এই route যোগ করো (run() ফাংশনের ভেতরে)
 app.patch('/api/recipes/like/:id', async (req, res) => {
   try {
@@ -936,7 +989,62 @@ app.patch('/api/admin/reports/:id', verifyToken, async (req, res) => {
   }
 });
 
+// GET: সকল পেমেন্ট ট্রানজেকশন (Admin Only)
+// GET: সকল পেমেন্ট ও রেসিপি-পারচেজ ট্রানজেকশন একসাথে (Admin Only)
+app.get('/api/payments', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).send({ success: false, message: "Email is required" });
+    }
 
+    const adminUser = await userCollection.findOne({ email });
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).send({ success: false, message: "Access denied. Admins only." });
+    }
+
+    // ১. দুটো কালেকশন থেকে ডাটা আনা
+    const subscriptionPayments = await paymentCollection.find().toArray();
+    const recipePurchases = await purchasedRecipesCollection.find().toArray();
+
+    // ২. transactionId দিয়ে ডিডুপ করে একসাথে merge করা
+    // (যদি একই transaction দুই কালেকশনেই থাকে, purchased_recipes-কে প্রায়োরিটি দেওয়া হচ্ছে recipeId নিশ্চিত করতে)
+    const map = new Map();
+
+    subscriptionPayments.forEach((p) => {
+      map.set(p.transactionId, {
+        _id: p._id,
+        userEmail: p.userEmail,
+        amount: p.amount,
+        transactionId: p.transactionId,
+        paidAt: p.paidAt,
+        paymentStatus: p.paymentStatus,
+        recipeId: p.recipeId || null,
+      });
+    });
+
+    recipePurchases.forEach((p) => {
+      const txId = p.transactionId || p.stripeSessionId;
+      map.set(txId, {
+        _id: p._id,
+        userEmail: p.userEmail,
+        amount: p.amount,
+        transactionId: txId,
+        paidAt: p.purchasedAt || p.paidAt,
+        paymentStatus: p.paymentStatus,
+        recipeId: p.recipeId,
+      });
+    });
+
+    const combined = Array.from(map.values()).sort(
+      (a, b) => new Date(b.paidAt) - new Date(a.paidAt)
+    );
+
+    res.status(200).send({ success: true, data: combined });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
 
 // // Server-side: index.js
 // app.get('/api/recipes', async (req, res) => {
