@@ -11,7 +11,7 @@ app.use(express.json());
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 
 app.use(cors({
-    origin: "http://localhost:3000", // আপনার ফ্রন্টএন্ড URL
+    origin: "http://localhost:3000", 
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
     credentials: true
 }));
@@ -31,8 +31,7 @@ const client = new MongoClient(uri, {
   }
 });
 
-// Auth Verification Middleware
-// Auth Verification Middleware (সংশোধিত)
+
 
 const verifyToken = async (req, res, next) => {
   try {
@@ -88,9 +87,14 @@ const verifyToken = async (req, res, next) => {
 
 const FREE_RECIPE_LIMIT = 2;
 
-async function run() {
-  try {
-    await client.connect();
+// async function run() {
+//   try {
+//     await client.connect();
+    
+ client.connect(()=>{
+  console.log('connecting to MONGODB')
+ }).catch(console.dir) 
+
     const database = client.db("last_project_db");
     const recipeCollection = database.collection("recipes");
     const userCollection = database.collection("user"); 
@@ -101,73 +105,59 @@ async function run() {
     const likeCollection = database.collection("likes");
 
 
-    // ----------------------------------------------------
-    // 📊 1. DASHBOARD REAL-TIME METRICS GENERATOR API
-    // ----------------------------------------------------
-    app.get('/api/user-stats/:email', async (req, res) => {
-      try {
-        const userEmail = req.params.email;
+   
+   app.get('/api/user-stats/:email', async (req, res) => {
+  try {
+    const userEmail = req.params.email;
 
-        if (!userEmail) {
-          return res.status(400).send({ success: false, message: "Email parameter is required" });
-        }
+    if (!userEmail) {
+      return res.status(400).send({ success: false, message: "Email parameter is required" });
+    }
 
-        // ১. payments কালেকশন থেকে চেক করা হচ্ছে এই ইমেইলে কোনো সফল পেমেন্ট আছে কি না
-        const paymentDoc = await paymentCollection.findOne({ 
-          userEmail: userEmail, 
-          paymentStatus: "paid" 
-        });
-        const isPremium = !!paymentDoc;
+       const userDoc = await userCollection.findOne({ email: userEmail });
+    const isPremium = userDoc?.isPremium === true;
 
-        // ২. এই ইউজারের নিজের তৈরি করা মোট রেসিপি সংখ্যা কাউন্ট
-        const totalRecipes = await recipeCollection.countDocuments({ authorEmail: userEmail });
+       const totalRecipes = await recipeCollection.countDocuments({ authorEmail: userEmail });
 
-        // ৩. এই ইউজারের তৈরি করা রেসিপিগুলোতে টোটাল কত লাইক এসেছে তার যোগফল
-        const recipes = await recipeCollection.find({ authorEmail: userEmail }).toArray();
-        const totalLikesReceived = recipes.reduce((sum, recipe) => sum + (recipe.likesCount || 0), 0);
+       const recipes = await recipeCollection.find({ authorEmail: userEmail }).toArray();
+    const totalLikesReceived = recipes.reduce((sum, recipe) => sum + (recipe.likesCount || 0), 0);
 
-        // ৪. এই ইউজার নিজে কয়টি রেসিপি ফেভারিট লিস্টে যোগ করেছে তার কাউন্ট ($or ব্যবহার করা হয়েছে নিখুঁত সার্চের জন্য)
-        const totalFavorites = await favoriteCollection.countDocuments({ 
-          $or: [
-            { userEmail: userEmail },
-            { email: userEmail },
-            { authorEmail: userEmail }
-          ]
-        });
-
-        res.status(200).send({
-          success: true,
-          isPremium,
-          totalRecipes,
-          totalFavorites,
-          totalLikesReceived
-        });
-      } catch (error) {
-        console.error("Dashboard stats error:", error);
-        res.status(500).send({ success: false, message: error.message });
-      }
+       const totalFavorites = await favoriteCollection.countDocuments({ 
+      $or: [
+        { userEmail: userEmail },
+        { email: userEmail },
+        { authorEmail: userEmail }
+      ]
     });
 
-    // ----------------------------------------------------
-    // 🍳 2. RECIPE ADD (CREATE) API WITH FREE LIMIT
-    // ----------------------------------------------------
-    app.post('/api/recipes', verifyToken, async (req, res) => {
+    res.status(200).send({
+      success: true,
+      isPremium,
+      totalRecipes,
+      totalFavorites,
+      totalLikesReceived
+    });
+  } catch (error) {
+    console.error("Dashboard stats error:", error);
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
+       app.post('/api/recipes', verifyToken, async (req, res) => {
       try {
         const authorId = req.user.id || req.user.sub;
         const authorEmail = req.user.email;
 
-        // চেক করা হচ্ছে ইউজার প্রিমিয়াম কি না (payments কালেকশন থেকে)
         const paymentDoc = await paymentCollection.findOne({ userEmail: authorEmail, paymentStatus: "paid" });
         const isPremium = !!paymentDoc;
 
         if (!isPremium) {
-          // ফ্রি ইউজার হলে লিমিট চেক
-          const existingCount = await recipeCollection.countDocuments({ authorEmail });
+                   const existingCount = await recipeCollection.countDocuments({ authorEmail });
           if (existingCount >= FREE_RECIPE_LIMIT) {
             return res.status(403).send({
               success: false,
               code: "RECIPE_LIMIT_REACHED",
-              message: `ফ্রি প্ল্যানে সর্বোচ্চ ${FREE_RECIPE_LIMIT}টি রেসিপি যোগ করা যায়। দয়া করে প্রিমিয়ামে আপগ্রেড করুন।`
+              message: `You can add a maximum of ${FREE_RECIPE_LIMIT} recipes on the free plan. Please upgrade to Premium to continue.`
             });
           }
         }
@@ -203,31 +193,68 @@ async function run() {
       }
     });
 
-    // ----------------------------------------------------
-    // 🔍 3. GET ALL RECIPES
-    // ----------------------------------------------------
-   // ----------------------------------------------------
-    // 🔍 3. GET ALL RECIPES (with optional isFeatured filter)
-    // ----------------------------------------------------
-    app.get('/api/recipes', async (req, res) => {
-      try {
-        const { isFeatured } = req.query;
-        let query = {};
+  app.get('/api/recipes', async (req, res) => {
+  try {
+    const { 
+      isFeatured, 
+      page = 1, 
+      limit = 9, 
+      category, 
+      search 
+    } = req.query;
 
-        if (isFeatured === 'true') {
-          query = { isFeatured: true };
-        }
+    let query = {};
 
-        const recipes = await recipeCollection.find(query).sort({ createdAt: -1 }).toArray();
-        res.status(200).send({ success: true, data: recipes });
-      } catch (error) {
-        res.status(500).send({ success: false, message: error.message });
+    
+    if (isFeatured === 'true') {
+      query.isFeatured = true;
+    }
+
+   
+    if (category && category !== 'All') {
+      query.category = { $regex: new RegExp(`^${category}$`, 'i') };
+    }
+
+    
+    if (search && search.trim() !== '') {
+      const searchRegex = new RegExp(search.trim(), 'i');
+      query.$or = [
+        { recipeName: searchRegex },
+        { cuisineType: searchRegex }
+      ];
+    }
+
+    const pageNum = Math.max(parseInt(page) || 1, 1);
+    const limitNum = Math.max(parseInt(limit) || 9, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+  
+    const totalCount = await recipeCollection.countDocuments(query);
+
+   
+    const recipes = await recipeCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .toArray();
+
+    res.status(200).send({
+      success: true,
+      data: recipes,
+      pagination: {
+        totalCount,
+        totalPages: Math.ceil(totalCount / limitNum) || 1,
+        currentPage: pageNum,
+        limit: limitNum
       }
     });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+  
 
-    // ----------------------------------------------------
-    // 🔍 4. GET SINGLE RECIPE BY ID
-    // ----------------------------------------------------
     app.get('/api/recipes/:id', async (req, res) => {
       try {
         const id = req.params.id;
@@ -259,7 +286,7 @@ async function run() {
   }
 });
 
-// ইউজার কোন রেসিপিতে like/favorite করেছে তা চেক করার জন্য
+
 app.get('/api/user-actions/:email/:recipeId', async (req, res) => {
   try {
     const { email, recipeId } = req.params;
@@ -290,9 +317,7 @@ app.get('/api/user-actions/:email/:recipeId', async (req, res) => {
   }
 });
 
-    // ----------------------------------------------------
-    // 🛒 5. CHECK PURCHASE STATUS FOR A RECIPE
-    // ----------------------------------------------------
+   
     app.get('/api/check-purchase', async (req, res) => {
       try {
         const { email, recipeId } = req.query;
@@ -313,9 +338,7 @@ app.get('/api/user-actions/:email/:recipeId', async (req, res) => {
       }
     });
 
-    // ----------------------------------------------------
-    // 💳 6. STRIPE CHECKOUT SESSION CREATION
-    // ----------------------------------------------------
+   
     app.post('/api/create-checkout-session', verifyToken, async (req, res) => {
       try {
         const { recipeId, recipeName, price } = req.body;
@@ -343,9 +366,7 @@ app.get('/api/user-actions/:email/:recipeId', async (req, res) => {
       }
     });
 
-    // ----------------------------------------------------
-    // 🎯 7. VERIFY & SAVE PURCHASE HISTORY
-    // ----------------------------------------------------
+    
     app.post('/api/verify-purchase', verifyToken, async (req, res) => {
       try {
         const { sessionId, recipeId } = req.body;
@@ -391,9 +412,7 @@ app.get('/api/user-actions/:email/:recipeId', async (req, res) => {
     });
 
 
-    // ----------------------------------------------------
-// 🛒 GET USER'S PURCHASED RECIPES (with full recipe details)
-// ----------------------------------------------------
+   
 app.get('/api/my-purchased-recipes', async (req, res) => {
   try {
     const { email } = req.query;
@@ -401,7 +420,7 @@ app.get('/api/my-purchased-recipes', async (req, res) => {
       return res.status(400).send({ success: false, message: "Email is required" });
     }
 
-    // ১. এই ইউজারের সব successful purchase খুঁজে আনা
+    
     const purchases = await purchasedRecipesCollection
       .find({ userEmail: email, paymentStatus: "paid" })
       .sort({ purchasedAt: -1 })
@@ -411,8 +430,7 @@ app.get('/api/my-purchased-recipes', async (req, res) => {
       return res.status(200).send({ success: true, data: [] });
     }
 
-    // ২. recipeId গুলো ObjectId এ কনভার্ট করে recipes কালেকশন থেকে ডিটেইলস আনা
-    const recipeIds = purchases
+        const recipeIds = purchases
       .filter(p => ObjectId.isValid(p.recipeId))
       .map(p => new ObjectId(p.recipeId));
 
@@ -420,7 +438,7 @@ app.get('/api/my-purchased-recipes', async (req, res) => {
       .find({ _id: { $in: recipeIds } })
       .toArray();
 
-    // ৩. পারচেজ ইনফো আর রেসিপি ডিটেইলস একসাথে merge করা
+    
     const merged = purchases.map((purchase) => {
       const recipe = recipes.find(r => r._id.toString() === purchase.recipeId);
       return {
@@ -445,9 +463,7 @@ app.get('/api/my-purchased-recipes', async (req, res) => {
 });
 
 
-// ----------------------------------------------------
-// 💾 SAVE PURCHASE (called by Next.js after Stripe payment verification)
-// ----------------------------------------------------
+
 app.post('/api/save-purchase', async (req, res) => {
   try {
     const { email, recipeId, purchaseType, sessionId, amount } = req.body;
@@ -456,15 +472,14 @@ app.post('/api/save-purchase', async (req, res) => {
       return res.status(400).send({ success: false, message: "Email and sessionId are required" });
     }
 
-    // ডুপ্লিকেট প্রসেসিং ঠেকানোর জন্য — একই session আবার process হবে না
-    const alreadyPaid = await paymentCollection.findOne({ transactionId: sessionId });
+        const alreadyPaid = await paymentCollection.findOne({ transactionId: sessionId });
     const alreadyPurchased = await purchasedRecipesCollection.findOne({ transactionId: sessionId });
     if (alreadyPaid || alreadyPurchased) {
       return res.status(200).send({ success: true, message: "Already processed" });
     }
 
     if (purchaseType === "single_recipe" && recipeId) {
-      // ✅ একটি নির্দিষ্ট রেসিপি কেনা হয়েছে
+      
       await purchasedRecipesCollection.insertOne({
         userEmail: email,
         recipeId: recipeId.toString(),
@@ -475,7 +490,7 @@ app.post('/api/save-purchase', async (req, res) => {
         purchasedAt: new Date()
       });
     } else {
-      // ✅ প্রিমিয়াম মেম্বারশিপ কেনা হয়েছে
+      
       await paymentCollection.insertOne({
         userEmail: email,
         amount: amount || 19.99,
@@ -497,7 +512,7 @@ app.post('/api/save-purchase', async (req, res) => {
   }
 });
 
-    // server.js এ এই route যোগ করো (run() ফাংশনের ভেতরে)
+    
 app.patch('/api/recipes/like/:id', async (req, res) => {
   try {
     const id = req.params.id;
@@ -547,9 +562,7 @@ app.patch('/api/recipes/unlike/:id', async (req, res) => {
 });
 
 
-    // ----------------------------------------------------
-    // ❤️ 8. ADD TO FAVORITES (New)
-    // ----------------------------------------------------
+    
    app.post('/api/favorites', async (req, res) => {
   try {
     const { recipeId, recipeName, recipeImage, userEmail } = req.body;
@@ -586,9 +599,7 @@ app.delete('/api/favorites', async (req, res) => {
 });
 
 
-// ----------------------------------------------------
-// ❤️ GET USER'S FAVORITE RECIPES
-// ----------------------------------------------------
+
 app.get('/api/my-favorites', async (req, res) => {
   try {
     const { email } = req.query;
@@ -604,8 +615,7 @@ app.get('/api/my-favorites', async (req, res) => {
 });
 
 
-// POST: রিপোর্ট জমা দেওয়ার জন্য
-// POST: রিপোর্ট জমা দেওয়ার জন্য
+
 app.post('/api/reports', async (req, res) => {
   try {
     const { recipeId, userEmail, reason } = req.body;
@@ -614,7 +624,7 @@ app.post('/api/reports', async (req, res) => {
       return res.status(400).send({ success: false, message: "Missing required fields" });
     }
 
-    // চেক করুন ইউজার আগে রিপোর্ট করেছে কি না
+    
     const alreadyReported = await reportCollection.findOne({ recipeId, reporterEmail: userEmail });
     if (alreadyReported) {
        return res.status(400).send({ success: false, message: "You have already reported this recipe!" });
@@ -635,7 +645,7 @@ app.post('/api/reports', async (req, res) => {
 });
 
 
-// GET: অ্যাডমিন ড্যাশবোর্ড পরিসংখ্যান
+
 app.get('/api/admin-stats', async (req, res) => {
   try {
     const { email } = req.query;
@@ -648,7 +658,7 @@ app.get('/api/admin-stats', async (req, res) => {
       return res.status(403).send({ success: false, message: "Access denied. Admins only." });
     }
 
-    // ✅ শুধু role: "user" — admin বাদ দিয়ে কাউন্ট
+    
     const totalUsers = await userCollection.countDocuments({ role: "user" });
     const totalRecipes = await recipeCollection.estimatedDocumentCount();
     const totalReports = await reportCollection.estimatedDocumentCount();
@@ -670,11 +680,8 @@ app.get('/api/admin-stats', async (req, res) => {
 });
 
 
-// ----------------------------------------------------
-// 👥 MANAGE USERS (ADMIN APIS)
-// ----------------------------------------------------
 
-// ১. সকল ইউজারদের ডাটা নিয়ে আসার জন্য GET API (Admins Only)
+
 app.get('/api/admin/users', async (req, res) => {
   try {
     const { email } = req.query;
@@ -694,7 +701,7 @@ app.get('/api/admin/users', async (req, res) => {
   }
 });
 
-// ২. ইউজারকে ব্লক (Block) করার জন্য PATCH API
+
 app.patch('/api/admin/users/block/:id', async (req, res) => {
   try {
     const id = req.params.id;
@@ -727,7 +734,7 @@ app.patch('/api/admin/users/block/:id', async (req, res) => {
   }
 });
 
-// ৩. ইউজারকে আনব্লক (Unblock) করার জন্য PATCH API
+
 app.patch('/api/admin/users/unblock/:id', async (req, res) => {
   try {
     const id = req.params.id;
@@ -761,11 +768,7 @@ app.patch('/api/admin/users/unblock/:id', async (req, res) => {
 });
 
 
-// ============================================================================
-// 🍳 MANAGE RECIPES (ADMIN APIS)
-// ============================================================================
 
-/// ১. সকল ব্যবহারকারীর সমস্ত রেসিপি নিয়ে আসার জন্য GET API (Admins Only)
 app.get('/api/admin/recipes', async (req, res) => {
   try {
     const { email } = req.query;
@@ -785,7 +788,7 @@ app.get('/api/admin/recipes', async (req, res) => {
   }
 });
 
-// ২. রেসিপি ফিচারড (Featured) বা আন-ফিচারড করার জন্য PATCH API
+
 app.patch('/api/admin/recipes/feature/:id', async (req, res) => {
   try {
     const id = req.params.id;
@@ -817,7 +820,7 @@ app.patch('/api/admin/recipes/feature/:id', async (req, res) => {
   }
 });
 
-// ৩. অ্যাডমিন কর্তৃক যেকোনো রেসিপি সরাসরি ডিলিট করার জন্য DELETE API
+
 app.delete('/api/admin/recipes/:id', async (req, res) => {
   try {
     const id = req.params.id;
@@ -847,12 +850,12 @@ app.delete('/api/admin/recipes/:id', async (req, res) => {
   }
 });
 
-// ৪. অ্যাডমিন কর্তৃক যেকোনো রেসিপি Edit/Update করার জন্য PUT API
+
 app.put('/api/admin/recipes/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const updatedData = req.body;
-    const { email } = updatedData; // অ্যাডমিনের ইমেইল, frontend থেকে আসবে
+    const { email } = updatedData; 
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).send({ success: false, message: "Invalid Recipe ID" });
@@ -893,33 +896,26 @@ app.put('/api/admin/recipes/:id', async (req, res) => {
 
 
 
-// ============================================================================
-// 🚨 RECIPE REPORTS (ADMIN APIS)
-// ============================================================================
 
-// ১. ডাটাবেজ থেকে সকল রিপোর্ট করা রেসিপির লিস্ট নিয়ে আসা (GET API)
-// ১. ডাটাবেজ থেকে সকল রিপোর্ট করা রেসিপির লিস্ট নিয়ে আসা (GET API)
 app.get('/api/admin/reports', verifyToken, async (req, res) => {
   try {
     const requesterEmail = req.query.email;
     
-    // রিকোয়েস্টকারী আসলেই অ্যাডমিন কিনা চেক করা
-    const adminUser = await userCollection.findOne({ email: requesterEmail });
+       const adminUser = await userCollection.findOne({ email: requesterEmail });
     if (!adminUser || adminUser.role !== 'admin') {
       return res.status(403).send({ success: false, message: "Access denied. Admins only." });
     }
 
-    // Reports কালেকশন থেকে ডাটা আনা এবং String ID কে ObjectId তে রূপান্তর করে ম্যাচ করা
-    const reports = await reportCollection.aggregate([
+       const reports = await reportCollection.aggregate([
       {
         $lookup: {
           from: "recipes",
-          let: { r_id: "$recipeId" }, // reports কালেকশনের recipeId স্ট্রিংটি r_id ভেরিয়েবলে নিলাম
+          let: { r_id: "$recipeId" }, 
           pipeline: [
             {
               $match: {
                 $expr: {
-                  // স্ট্রিং r_id কে ObjectId তে রূপান্তর করে recipes এর _id এর সাথে তুলনা করা হচ্ছে
+                  
                   $eq: ["$_id", { $toObjectId: "$$r_id" }] 
                 }
               }
@@ -931,7 +927,7 @@ app.get('/api/admin/reports', verifyToken, async (req, res) => {
       {
         $unwind: {
           path: "$recipeDetails",
-          preserveNullAndEmptyArrays: true // রেসিপি সত্যি ডিলিট হয়ে গেলেও যেন রিপোর্ট লিস্টে থাকে
+          preserveNullAndEmptyArrays: true 
         }
       },
       { $sort: { createdAt: -1 } }
@@ -943,15 +939,10 @@ app.get('/api/admin/reports', verifyToken, async (req, res) => {
   }
 });
 
-// ২. রিপোর্টের ওপর অ্যাকশন নেওয়া (Dismiss Report অথবা Remove Recipe) (PATCH/DELETE API)
-// ============================================================================
-// 🚨 RECIPE REPORTS (ADMIN APIS) - [PATCH/DELETE OPTION 1 LOGIC]
-// ============================================================================
 app.patch('/api/admin/reports/:id', verifyToken, async (req, res) => {
   try {
     const reportId = req.params.id;
-    const { action, recipeId, email } = req.body; // action: 'dismiss' অথবা 'remove'
-
+    const { action, recipeId, email } = req.body; 
     if (!ObjectId.isValid(reportId)) {
       return res.status(400).send({ success: false, message: "Invalid Report ID" });
     }
@@ -961,7 +952,7 @@ app.patch('/api/admin/reports/:id', verifyToken, async (req, res) => {
       return res.status(403).send({ success: false, message: "Access denied. Admins only." });
     }
 
-    // [Option 1]: Dismiss করলে রিপোর্ট সরাসরি ডাটাবেজ থেকে মুছে যাবে
+   
     if (action === 'dismiss') {
       const deleteReport = await reportCollection.deleteOne({ _id: new ObjectId(reportId) });
       
@@ -971,14 +962,12 @@ app.patch('/api/admin/reports/:id', verifyToken, async (req, res) => {
       return res.status(200).send({ success: true, message: "Report dismissed and cleared successfully!" });
     } 
     
-    // [Option 1]: Remove করলে রেসিপি ডিলিট হবে এবং এই রিপোর্টটিও ডাটাবেজ থেকে মুছে যাবে
-    if (action === 'remove') {
+        if (action === 'remove') {
       if (recipeId && ObjectId.isValid(recipeId)) {
         await recipeCollection.deleteOne({ _id: new ObjectId(recipeId) });
       }
       
-      // রেসিপি ডিলিট করার পর এই রিপোর্টটিও ডাটাবেজ থেকে সাফ করে দেওয়া হচ্ছে
-      await reportCollection.deleteOne({ _id: new ObjectId(reportId) });
+            await reportCollection.deleteOne({ _id: new ObjectId(reportId) });
       
       return res.status(200).send({ success: true, message: "Recipe removed and report cleared successfully!" });
     }
@@ -989,8 +978,7 @@ app.patch('/api/admin/reports/:id', verifyToken, async (req, res) => {
   }
 });
 
-// GET: সকল পেমেন্ট ট্রানজেকশন (Admin Only)
-// GET: সকল পেমেন্ট ও রেসিপি-পারচেজ ট্রানজেকশন একসাথে (Admin Only)
+
 app.get('/api/payments', async (req, res) => {
   try {
     const { email } = req.query;
@@ -1003,13 +991,11 @@ app.get('/api/payments', async (req, res) => {
       return res.status(403).send({ success: false, message: "Access denied. Admins only." });
     }
 
-    // ১. দুটো কালেকশন থেকে ডাটা আনা
+    
     const subscriptionPayments = await paymentCollection.find().toArray();
     const recipePurchases = await purchasedRecipesCollection.find().toArray();
 
-    // ২. transactionId দিয়ে ডিডুপ করে একসাথে merge করা
-    // (যদি একই transaction দুই কালেকশনেই থাকে, purchased_recipes-কে প্রায়োরিটি দেওয়া হচ্ছে recipeId নিশ্চিত করতে)
-    const map = new Map();
+       const map = new Map();
 
     subscriptionPayments.forEach((p) => {
       map.set(p.transactionId, {
@@ -1049,10 +1035,10 @@ app.get('/api/payments', async (req, res) => {
 // // Server-side: index.js
 // app.get('/api/recipes', async (req, res) => {
 //   try {
-//     const { isFeatured } = req.query; // Query parameter থেকে মান নিচ্ছি
+//     const { isFeatured } = req.query; 
 //     let query = {};
     
-//     // যদি ফ্রন্টএন্ড থেকে ?isFeatured=true আসে
+
 //     if (isFeatured === 'true') {
 //       query = { isFeatured: true };
 //     }
@@ -1063,11 +1049,8 @@ app.get('/api/payments', async (req, res) => {
 //     res.status(500).send({ success: false, message: error.message });
 //   }
 // });
-// ============================================================================
-// 🍳 USER RECIPES MANAGEMENT ROUTES
-// ============================================================================
 
-// GET MY RECIPES
+
 app.get('/api/my-recipes', async (req, res) => {
   try {
     const { email } = req.query;
@@ -1085,12 +1068,12 @@ app.get('/api/my-recipes', async (req, res) => {
   }
 });
 
-// UPDATE RECIPE WITH OWNER CHECK
+
 app.put('/api/recipes/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const updatedData = req.body;
-    const authorEmail = updatedData.email; // ফ্রন্টএন্ড থেকে email আসবে
+    const authorEmail = updatedData.email; 
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).send({ success: false, message: "Invalid Recipe ID" });
@@ -1130,7 +1113,7 @@ app.put('/api/recipes/:id', async (req, res) => {
   }
 });
 
-// DELETE RECIPE WITH OWNER CHECK
+
 app.delete('/api/recipes/:id', async (req, res) => {
   try {
     const id = req.params.id;
@@ -1158,13 +1141,15 @@ app.delete('/api/recipes/:id', async (req, res) => {
   }
 });
 
-    console.log("Connected successfully to MongoDB!");
-  } catch (error) {
-    console.dir(error);
-  }
-}
-run().catch(console.dir);
+//     console.log("Connected successfully to MongoDB!");
+//   } catch (error) {
+//     console.dir(error);
+//   }
+// }
+// run().catch(console.dir);
 
 app.listen(port, () => {
   console.log(`RecipeHub app listening on port ${port}`);
 });
+
+module.exports = app;
