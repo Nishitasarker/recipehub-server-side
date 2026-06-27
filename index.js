@@ -206,10 +206,20 @@ async function run() {
     // ----------------------------------------------------
     // 🔍 3. GET ALL RECIPES
     // ----------------------------------------------------
+   // ----------------------------------------------------
+    // 🔍 3. GET ALL RECIPES (with optional isFeatured filter)
+    // ----------------------------------------------------
     app.get('/api/recipes', async (req, res) => {
       try {
-        const recipes = await recipeCollection.find({}).sort({ createdAt: -1 }).toArray();
-        res.status(200).send(recipes);
+        const { isFeatured } = req.query;
+        let query = {};
+
+        if (isFeatured === 'true') {
+          query = { isFeatured: true };
+        }
+
+        const recipes = await recipeCollection.find(query).sort({ createdAt: -1 }).toArray();
+        res.status(200).send({ success: true, data: recipes });
       } catch (error) {
         res.status(500).send({ success: false, message: error.message });
       }
@@ -926,6 +936,25 @@ app.patch('/api/admin/reports/:id', verifyToken, async (req, res) => {
   }
 });
 
+
+
+// // Server-side: index.js
+// app.get('/api/recipes', async (req, res) => {
+//   try {
+//     const { isFeatured } = req.query; // Query parameter থেকে মান নিচ্ছি
+//     let query = {};
+    
+//     // যদি ফ্রন্টএন্ড থেকে ?isFeatured=true আসে
+//     if (isFeatured === 'true') {
+//       query = { isFeatured: true };
+//     }
+
+//     const recipes = await recipeCollection.find(query).toArray();
+//     res.status(200).send({ success: true, data: recipes });
+//   } catch (error) {
+//     res.status(500).send({ success: false, message: error.message });
+//   }
+// });
 // ============================================================================
 // 🍳 USER RECIPES MANAGEMENT ROUTES
 // ============================================================================
