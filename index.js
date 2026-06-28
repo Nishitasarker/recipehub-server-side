@@ -143,6 +143,29 @@ const FREE_RECIPE_LIMIT = 2;
   }
 });
 
+
+app.get('/api/recipes/my-status', verifyToken, async (req, res) => {
+  try {
+    const authorEmail = req.user.email;
+
+    const paymentDoc = await paymentCollection.findOne({ userEmail: authorEmail, paymentStatus: "paid" });
+    const userDoc = await userCollection.findOne({ email: authorEmail });
+    const isPremium = !!paymentDoc || userDoc?.isPremium === true;
+
+    const count = await recipeCollection.countDocuments({ authorEmail });
+
+    res.status(200).send({
+      success: true,
+      isPremium,
+      count,
+      limit: FREE_RECIPE_LIMIT,
+      canAddMore: isPremium || count < FREE_RECIPE_LIMIT
+    });
+  } catch (error) {
+    res.status(500).send({ success: false, message: error.message });
+  }
+});
+
        app.post('/api/recipes', verifyToken, async (req, res) => {
       try {
         const authorId = req.user.id || req.user.sub;
