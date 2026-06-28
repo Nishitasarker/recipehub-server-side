@@ -149,7 +149,8 @@ const FREE_RECIPE_LIMIT = 2;
         const authorEmail = req.user.email;
 
         const paymentDoc = await paymentCollection.findOne({ userEmail: authorEmail, paymentStatus: "paid" });
-        const isPremium = !!paymentDoc;
+         const userDoc = await userCollection.findOne({ email: authorEmail });
+          const isPremium = !!paymentDoc || userDoc?.isPremium === true;
 
         if (!isPremium) {
                    const existingCount = await recipeCollection.countDocuments({ authorEmail });
