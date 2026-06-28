@@ -11,7 +11,7 @@ app.use(express.json());
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 
 app.use(cors({
-    origin: "http://localhost:3000", 
+    origin: "https://recipe-hub-one-peach.vercel.app", 
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
     credentials: true
 }));
